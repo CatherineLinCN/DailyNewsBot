@@ -28,14 +28,14 @@ RSS_FEEDS = [
     "http://www.xinhuanet.com/politics/news_politics.xml",
     "http://www.cctv.com/program/rss/02/01/index.xml",
     "https://www.chinanews.com.cn/rss/scroll-news.xml",
-    # ===== 国际权威（GitHub Actions 运行时会自动抓取）
+    # ===== 国际权威 =====
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://rsshub.app/apnews/topics/ap-top-news",
 ]
 # =================================================
 
 def fetch_news():
-    """从所有 RSS 源抓取最新新闻标题和链接"""
+    """从所有 RSS 源抓取最新新闻标题、链接和日期"""
     all_news = []
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -54,10 +54,16 @@ def fetch_news():
                 continue
                 
             for entry in feed.entries[:5]:
+                # 提取并格式化日期
+                pub_date = "未知日期"
+                if "published_parsed" in entry and entry.published_parsed:
+                    pub_date = time.strftime("%Y-%m-%d", entry.published_parsed)
+                
                 all_news.append({
                     "title": entry.title,
                     "link": entry.link,
-                    "source": feed.feed.get("title", "未知来源")
+                    "source": feed.feed.get("title", "未知来源"),
+                    "pub_date": pub_date
                 })
             print(f"  -> 成功抓取 {len(feed.entries[:5])} 条新闻")
             
@@ -82,18 +88,19 @@ def save_seen_news(seen_set):
 
 def summarize_with_deepseek(news_list):
     """调用 DeepSeek API 对新闻进行筛选、排序和摘要"""
-    news_text = "\n".join([f"- [{item['source']}] {item['title']} (链接: {item['link']})" for item in news_list])
+    news_text = "\n".join([f"- [{item['source']}] [{item['pub_date']}] {item['title']} (链接: {item['link']})" for item in news_list])
 
     prompt = f"""
-    你是一个资深的新闻总编辑。以下是过去 24 小时内来自不同来源的新闻标题和链接。
+    你是一个资深的新闻总编辑。以下是过去 24 小时内来自不同来源的新闻标题和链接（含日期）。
     请完成以下任务：
     1. 筛选出**国内新闻 5 条**和**国际新闻 5 条**，共 10 条新闻。
     2. 筛选标准：突发性 > 政策变动/地缘政治 > 经济/社会重大影响 > 常规报道。
     3. 对这 10 条新闻进行**重要性排序**（rank 从 1 到 10，1 为最重要），必须把最重要的放在最前面。
     4. 为每一条写一段 40-80 字的中文摘要，必须基于标题内容，不要编造信息。
+    5. **必须原样保留每条新闻的日期。**（如果在新闻列表里看到了日期，就填那个日期，不要自己编造日期）。
     
     输出格式要求：
-    请输出一个 JSON 对象，必须包含一个名为 "news" 的数组。数组里每个对象包含字段：title（标题）, summary（摘要）, source（来源）, link（链接）, category（分类，填“国内”或“国际”）, rank（数字，1-10）。
+    请输出一个 JSON 对象，必须包含一个名为 "news" 的数组。数组里每个对象包含字段：title（标题）, summary（摘要）, source（来源）, link（链接）, pub_date（日期，保留原本的 YYYY-MM-DD 格式）, category（分类，填“国内”或“国际”）, rank（数字，1-10）。
     严禁输出 JSON 以外的任何内容。
 
     新闻列表：
@@ -111,9 +118,8 @@ def summarize_with_deepseek(news_list):
             response_format={"type": "json_object"}
         )
         
-        # 打印原始返回内容，方便调试
         raw_content = response.choices[0].message.content
-        print("DeepSeek 原始返回内容:", raw_content[:200], "...") # 只打印前200字符防止刷屏
+        # print("DeepSeek 原始返回内容:", raw_content[:200], "...") # 调试用，平时可注释
         
         result = json.loads(raw_content)
         
@@ -125,9 +131,7 @@ def summarize_with_deepseek(news_list):
         else:
             news_items = []
         
-        # 按照 rank 排序，确保最重要的排在最前面
         news_items.sort(key=lambda x: x.get("rank", 999))
-        
         return news_items
     except Exception as e:
         print(f"调用 DeepSeek API 失败: {e}")
@@ -145,9 +149,12 @@ def send_email(news_items):
     email_password = os.getenv("EMAIL_PASSWORD")
     email_to = os.getenv("EMAIL_TO")
 
-    content_lines = ["今日新闻摘要\n"]
+    content_lines = ["📰 今日新闻摘要（按重要性排序）\n"]
+    
     for i, item in enumerate(news_items, 1):
-        content_lines.append(f"{i}. {item['title']}")
+        prefix = "【重点关注】" if i <= 3 else ""
+        content_lines.append(f"{prefix}{i}. [{item.get('category', '')}] {item['title']}")
+        content_lines.append(f"   📅 日期：{item.get('pub_date', '未知')}")
         content_lines.append(f"   {item['summary']}")
         content_lines.append(f"   来源：{item['source']} | 链接：{item['link']}\n")
 
@@ -185,9 +192,10 @@ def job():
 
     summaries = summarize_with_deepseek(new_news)
 
-        if summaries:
+    if summaries:
         print("摘要生成成功，正在发送邮件...")
         send_email(summaries)
+        # 重点：把本次抓取到的所有新闻链接都加入记录，防止明天重复
         for item in new_news:
             seen.add(item["link"])
         save_seen_news(seen)
@@ -198,10 +206,10 @@ def job():
     print("任务执行完毕。")
 
 if __name__ == "__main__":
-    # --- 本地测试模式 ---
+    # 本地测试或云端运行都调用 job()
     job()
 
-    # --- 本地定时模式（如果不用 GitHub Actions，就取消下面注释，并注释掉上面的 job()）---
+    # 如果你想在本地电脑用定时任务（不推荐，推荐用 GitHub Actions），可以取消下面这几行的注释，并注释掉上面的 job()
     # schedule.every().day.at("07:30").do(job)
     # print("定时任务已启动，等待执行...")
     # while True:
