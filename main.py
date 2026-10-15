@@ -149,11 +149,12 @@ def send_email(news_items):
     email_password = os.getenv("EMAIL_PASSWORD")
     email_to = os.getenv("EMAIL_TO")
 
-    content_lines = ["📰 今日新闻摘要（按重要性排序）\n"]
+    # 标题去掉了“按重要性排序”
+    content_lines = ["📰 今日新闻摘要\n"]
     
     for i, item in enumerate(news_items, 1):
-        prefix = "【重点关注】" if i <= 3 else ""
-        content_lines.append(f"{prefix}{i}. [{item.get('category', '')}] {item['title']}")
+        # 去掉了【重点关注】前缀，序号后直接跟分类和标题
+        content_lines.append(f"{i}. [{item.get('category', '')}] {item['title']}")
         content_lines.append(f"   📅 日期：{item.get('pub_date', '未知')}")
         content_lines.append(f"   {item['summary']}")
         content_lines.append(f"   来源：{item['source']} | 链接：{item['link']}\n")
@@ -172,7 +173,6 @@ def send_email(news_items):
         print("邮件发送成功。")
     except Exception as e:
         print(f"邮件发送失败: {e}")
-
 def job():
     """完整的任务流程：抓取 -> 去重 -> 摘要 -> 推送"""
     print("开始执行每日新闻摘要任务...")
