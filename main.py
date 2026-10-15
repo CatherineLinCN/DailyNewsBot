@@ -185,10 +185,11 @@ def job():
 
     summaries = summarize_with_deepseek(new_news)
 
-    if summaries:
+        if summaries:
         print("摘要生成成功，正在发送邮件...")
         send_email(summaries)
-        for item in summaries:
+        # 把本次发送的链接加入已读记录
+        for item in new_news: # 如果你已经是new_news则保持，如果是summaries就改成new_news
             seen.add(item["link"])
         save_seen_news(seen)
         print(f"已更新已读记录，当前共记录 {len(seen)} 条链接。")
